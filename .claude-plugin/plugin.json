@@ -1,0 +1,12 @@
+{
+  "name": "site-to-october",
+  "description": "Migrate any website to OctoberCMS v4 — scrape, analyze, and generate complete themes with layouts, partials, pages, and content strategy",
+  "version": "1.0.0",
+  "author": {
+    "name": "SoftAppStudio",
+    "email": "info@softappstudio.com"
+  },
+  "repository": "https://github.com/softappstudio/site-to-october",
+  "license": "MIT",
+  "keywords": ["octobercms", "migration", "wordpress", "website-clone", "scraping"]
+}
