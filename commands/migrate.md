@@ -98,7 +98,7 @@ Try fetching `<URL>/wp-json/wp/v2/` — if it returns a valid response:
 
 ### Step 2A: Scrape Key Pages
 
-For each URL group, scrape the **sample URL** (one per group) plus any listing URLs. You need one representative page per template, not every page.
+For each URL group, scrape the **sample URL** (one per group) plus any listing URLs for template analysis. **IMPORTANT: For collection groups (blog/*, services/*, etc.), also scrape ALL individual pages** so you can extract real content for seeding the database later. Scraping only one sample per group will leave most records empty.
 
 ```bash
 mkdir -p .migration/pages/<group-name>
@@ -112,7 +112,7 @@ curl -sL -A "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/
 
 ### Step 2B: Download Assets
 
-Download all CSS, JS, images, and fonts referenced in the scraped HTML.
+Download all CSS, JS, images, and fonts referenced in the scraped HTML. **IMPORTANT: Also check inside CSS files for `@font-face` declarations pointing to the original domain** — download those fonts locally and rewrite the CSS `url()` paths to use relative paths (e.g., `../fonts/`). Fonts served from the original domain will be blocked by CORS on the new site.
 
 **Approach:** Parse the downloaded HTML files, extract all asset URLs (stylesheets, scripts, images, fonts), then download each with curl. Organize by type:
 
@@ -332,7 +332,13 @@ Show the user the migration report from Phase 3E. For each content group, presen
 3. Detected fields (title, body, image, date, etc.)
 4. Recommended approach (RainLab.Blog, Tailor blueprint, static page)
 
-Ask the user: **"How do you want to handle each group?"**
+Also present the option of a **full plugin with models/controllers** instead of Tailor:
+- Better for production sites — custom list views, filters, scopes, relations
+- Full control over backend UI and business logic
+- Standard OctoberCMS pattern any developer can maintain
+- More work upfront but better long-term
+
+Ask the user: **"How do you want to handle each group? Tailor blueprints (quick), full plugin (production-grade), or static pages?"**
 
 ### Step 5B: Generate Content Structures
 
@@ -375,6 +381,42 @@ name: Site Configuration
 fields:
     # ... global settings
 ```
+
+**For a full plugin with models/controllers:**
+Create a single plugin (e.g., `Author.Content`) with models, controllers, and components for each content type. Follow these critical rules:
+
+1. Use `php artisan create:plugin`, `create:model`, `create:controller` to scaffold
+2. **version.yaml format** — MUST use proper YAML list syntax:
+   ```yaml
+   v1.0.1:
+       - 'First version'
+       - create_table_one.php
+       - create_table_two.php
+   ```
+   NOT `v1.0.1: Description` on one line — that makes October treat migrations as a comment and skip them.
+
+3. **NEVER create a database column with the same name as an `$attachOne`/`$attachMany` relation.** This causes a naming collision where the column value shadows the relation, making file attachments invisible. If you need `featured_image` as an attachment, do NOT add a `featured_image` string column to the migration.
+
+4. **File attachments — correct way to attach files programmatically:**
+   ```php
+   $file = new \System\Models\File;
+   $file->fromFile('/path/to/image.jpg');
+   $file->is_public = true;
+   $file->save();
+   $model->featured_image()->add($file);
+   ```
+   Do NOT use `$model->featured_image = (new File)->fromFile(...)` in seeders — it won't persist.
+
+5. **In Twig templates, use `.url` to get the image URL, not `.path`:**
+   ```twig
+   <img src="{{ model.featured_image.url }}" alt="">
+   ```
+
+6. **Add `protected $guarded = [];`** to all models to allow mass assignment in seeders.
+
+7. **Register components** in Plugin.php for frontend pages (List + Detail per content type).
+
+8. **Create a seeder migration** (v1.0.2) that populates all records with real scraped content and attaches images.
 
 **For RainLab.Blog:**
 - Ensure the plugin is installed: `composer require rainlab/blog-plugin`
@@ -435,4 +477,8 @@ If content was extracted in Phase 3D and Tailor blueprints were generated:
 - **No unnecessary plugins.** Don't install plugins unless the user explicitly requests them for a content group.
 - **Preserve functionality.** If the site has forms, sliders, accordions, tabs — keep the JavaScript that powers them.
 - **Work incrementally.** Complete each phase before moving to the next. Show progress to the user at each phase boundary.
-- **Ask before deciding on content strategy.** Phase 5 is interactive — never auto-decide whether to use Tailor vs RainLab vs static.
+- **Ask before deciding on content strategy.** Phase 5 is interactive — never auto-decide whether to use Tailor vs plugin vs RainLab vs static.
+- **Download ALL assets including fonts.** Check CSS `@font-face` rules for font URLs pointing to the original domain — these WILL break due to CORS. Download fonts locally and rewrite CSS paths.
+- **Scrape ALL collection pages for content.** Don't just scrape one sample per template — scrape every page in the collection so you can seed the database with real content.
+- **Check APP_URL in .env.** After migration, update `APP_URL` to match the local dev domain (e.g., `http://sitename.test`). File attachment URLs are generated from this value.
+- **Storage permissions.** After setup, ensure `storage/` is writable by the web server: `chown -R www-data:www-data storage && chmod -R 775 storage`.

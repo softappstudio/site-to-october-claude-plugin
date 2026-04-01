@@ -146,7 +146,19 @@ Convert ALL local asset references:
 | `https://cdn.jsdelivr.net/...` | Keep as-is (external CDN) |
 | `data:image/svg+xml,...` | Keep as-is (inline) |
 
-**In CSS files:** Replace `url(../images/bg.png)` with `url(../images/bg.png)` — keep relative paths within CSS since they resolve relative to the CSS file location inside `assets/css/`.
+**In CSS files:** Keep relative paths within CSS since they resolve relative to the CSS file location inside `assets/css/`. **CRITICAL: Also check for `@font-face` declarations** that reference the original domain (e.g., `url(https://oldsite.com/.../font.woff2)`) — download these fonts to `assets/fonts/` and rewrite to `url(../fonts/font.woff2)`. Original domain fonts will fail due to CORS.
+
+**File attachment images in Twig:** When displaying images from `$attachOne`/`$attachMany` relations (not static theme assets), use `.url`:
+```twig
+{# Correct — for model file attachments #}
+<img src="{{ model.featured_image.url }}" alt="">
+
+{# Wrong — .path does not exist on File model #}
+<img src="{{ model.featured_image.path }}" alt="">
+
+{# For static theme assets, continue using |theme filter #}
+<img src="{{ 'assets/images/logo.svg'|theme }}" alt="">
+```
 
 ## WordPress Cleanup Checklist
 
