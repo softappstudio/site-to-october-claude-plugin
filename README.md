@@ -40,7 +40,7 @@ Just run the command — it handles everything interactively:
 
 The plugin will:
 
-1. **Check your environment** — if Firecrawl isn't installed, it asks you to install it. If you're not in an OctoberCMS project, it offers to create one.
+1. **Check your environment** — verifies curl/wget are available. If you're not in an OctoberCMS project, it offers to create one.
 2. **Discover** all URLs on the site (sitemap or crawl)
 3. **Scrape** one page per unique template (desktop + mobile)
 4. **Download** all CSS, JS, images, and fonts
@@ -89,15 +89,27 @@ The plugin doesn't auto-decide how to manage content. After analysis, it present
 
 | Content Type | Suggested Approach |
 |-------------|-------------------|
-| Blog / News | RainLab.Blog or Tailor stream |
-| Services / Portfolio / Team | Tailor stream blueprint |
+| Blog / News | Full plugin (production) or Tailor stream |
+| Services / Portfolio / Team | Full plugin (production) or Tailor stream |
 | Homepage sections | Tailor single blueprint |
 | Site settings / Social links | Tailor global blueprint |
 | Static pages (About, Contact) | Inline in theme pages |
 
+### Multilingual Support
+
+For multilingual sites, the plugin automatically:
+- Detects languages via hreflang, URL prefixes, and language switchers
+- Installs `rainlab/translate-plugin` for `localeUrl` support
+- Adds `localeUrl` viewBag entries to every page for translated URLs
+- Configures `localePicker` and `sitePicker` components in layouts
+- Uses `|page` filter for all internal links (locale-aware routing)
+- Adds `|trans` to titles and user-visible strings
+- Sets up `whereTranslation` fallback in components for translated slug lookup
+- Creates `lang/en.json` (or other locales) with string translations
+
 ## Works With Any Website
 
-Despite the name, this isn't WordPress-specific. It works on any website — WordPress, Squarespace, Wix, Shopify, custom-built, static HTML. The scraping is HTML-based, so the source CMS doesn't matter.
+It works on any website — WordPress, Squarespace, Wix, Shopify, custom-built, static HTML. The scraping is HTML-based, so the source CMS doesn't matter.
 
 If the source happens to be WordPress and the REST API is available, the plugin will opportunistically grab structured content as a bonus.
 

@@ -36,10 +36,10 @@ Or if you have an existing project elsewhere, navigate there first.
 
 ### Step 0C: Theme Name
 
-Derive a theme name from the URL (e.g., `solmatech` from `solmatech.ca`, `bellevie` from `belleviespa.com`). Confirm with the user:
+Derive a theme name from the URL (e.g., `acme` from `acme.com`, `greenleaf` from `greenleafstudio.com`). Confirm with the user:
 
 ```
-I'll create the theme as "solmatech". Sound good, or do you want a different name?
+I'll create the theme as "acme". Sound good, or do you want a different name?
 ```
 
 **STOP and wait for confirmation** before proceeding to Phase 1.
@@ -85,7 +85,61 @@ Save the grouping to `.migration/url-groups.json` with this structure:
 }
 ```
 
-### Step 1C: WordPress API Probe (Optional Bonus)
+### Step 1C: Multisite & Language Detection
+
+Before proceeding, detect if the site has multiple languages or country-specific subsites.
+
+**Detection methods:**
+1. Check for `hreflang` meta tags on the homepage
+2. Check `<html lang="...">` across known prefixes
+3. Look for language switcher links in the HTML
+4. Check for country/language prefixes (`/en/`, `/fr/`, `/sg/`, `/hk/`, etc.)
+5. Check WPML/Polylang indicators in the source
+
+**Probe common prefix patterns:**
+```bash
+for path in "" "en" "fr" "es" "zh" "ko" "ja"; do
+  status=$(curl -sL -o /dev/null -w "%{http_code}" -A "Mozilla/5.0" "<URL>/$path/")
+  lang=$(curl -sL -A "Mozilla/5.0" "<URL>/$path/" 2>&1 | grep -oP 'lang="[^"]*"' | head -1)
+  echo "$path/ → $status $lang"
+done
+```
+
+**Save detection results to `.migration/multisite.json`.**
+
+**Present your findings to the user and ask them to confirm:**
+
+```
+I detected the following language/site structure:
+- [list detected languages/countries with prefixes]
+
+Does this look right? Are there other languages or country subsites I missed?
+Which language is the default/primary?
+Is the content the same across languages (translations of the same pages),
+or is each country/language a separate site with different content?
+```
+
+**STOP and wait for user confirmation.** The user may know about additional languages or subsites that weren't auto-detected.
+
+**Three possible outcomes:**
+
+1. **Single language** — no multisite needed. Proceed normally.
+
+2. **Same content, multiple languages** (e.g., a default language + `/xx/` translations of the same pages)
+   - Ask the user which language is the primary/default
+   - Use OctoberCMS **Translatable trait** on models
+   - Scrape ALL language versions of every page
+   - One set of records with translated attributes
+
+3. **Country subsites with languages** (e.g., `/sg/`, `/hk/`, `/hk/en/`, `/kr/`, `/kr/en/`)
+   - Each country has different content, some countries have multiple languages
+   - Use OctoberCMS **MultisiteGroup + Translatable traits** on models
+   - Each country = Site Group, each language within = Site
+   - Scrape ALL country/language combinations
+
+The chosen multisite type affects everything downstream: scraping scope, model traits, seeder logic, and theme setup. Get it right here.
+
+### Step 1D: WordPress API Probe (Optional Bonus)
 
 Try fetching `<URL>/wp-json/wp/v2/` — if it returns a valid response:
 - Fetch posts, pages, categories, custom post types
@@ -237,18 +291,25 @@ Create `layouts/default.htm` from the common structure identified in Phase 3A.
 The layout MUST use these OctoberCMS conventions:
 ```twig
 description = "Default Layout"
+
+[sitePicker]
+[localePicker]
 ==
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ this.site.locale }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ this.page.meta_title ?: this.page.title }} - Site Name</title>
+    <title>{{ this.page.meta_title ? this.page.meta_title|trans : this.page.title|trans }} - Site Name</title>
     <meta name="description" content="{{ this.page.meta_description }}">
+    <meta property="og:title" content="{{ this.page.meta_title ? this.page.meta_title|trans : this.page.title|trans }} - Site Name">
+    {% for site in sitePicker.sites %}
+        <link rel="alternate" hreflang="{{ site.locale }}" href="{{ site.url }}" />
+    {% endfor %}
     {% styles %}
     <link rel="stylesheet" href="{{ 'assets/css/style.css'|theme }}">
 </head>
-<body>
+<body class="{{ this.page.cssClass }}">
     {% partial 'header' %}
 
     {% page %}
@@ -260,6 +321,7 @@ description = "Default Layout"
 </body>
 </html>
 ```
+Note: `[sitePicker]` and `[localePicker]` components are required for multilingual sites (requires `rainlab/translate-plugin`). For single-language sites, they can be omitted. Use `{{ this.site.locale }}` for `<html lang>`, not a hardcoded value. Use `|trans` on titles so they get translated.
 
 If multiple distinct layouts exist (e.g., pages with sidebar vs. full-width), create separate layout files.
 
@@ -460,6 +522,129 @@ If content was extracted in Phase 3D and Tailor blueprints were generated:
 1. Run `php artisan tailor:migrate` to create tables
 2. Create a temporary artisan command or seeder to import the JSON content
 3. Or instruct the user to manually enter content via the backend
+
+### Step 5E: Multisite Setup (if applicable)
+
+If multisite was detected in Step 1C, set up OctoberCMS multisite after the plugin/content structures are in place.
+
+**For Translatable (same content, multiple languages):**
+
+1. **Install RainLab.Translate plugin:**
+   ```bash
+   composer require rainlab/translate-plugin
+   php artisan october:migrate
+   ```
+   This provides `localeUrl` viewBag support, `localePicker` component, and `whereTranslation` scope. Without it, URL translation does not work.
+
+2. **Create sites** in the backend at Settings → Manage Sites:
+   - Primary site: the default language (as confirmed by user), no prefix or `/`
+   - Additional site(s): one per language, with a route prefix (e.g., `/en`)
+   - Set the correct locale for each site
+
+3. **Add the Translatable trait** to all models that have user-facing text:
+   ```php
+   use \October\Rain\Database\Traits\Translatable;
+
+   public $translatable = ['title', 'slug', 'excerpt', 'content', 'description'];
+   ```
+
+4. **Add `sitePicker` AND `localePicker` components** to the layout:
+   ```
+   [sitePicker]
+   [localePicker]
+   ```
+
+5. **Add `localeUrl` to every page's viewBag** — this is how URLs get translated per locale:
+   ```
+   [viewBag]
+   localeUrl[en] = "/about-us/"
+   localeUrl[fr] = "/a-propos/"
+   ```
+   For dynamic pages with `:slug`:
+   ```
+   [viewBag]
+   localeUrl[en] = "/project/:slug"
+   localeUrl[fr] = "/realisation/:slug"
+   ```
+   The route prefix (`/en`) is added automatically by multisite — do NOT include it in `localeUrl`.
+
+6. **Use `|page` filter for ALL internal links** — NEVER hardcode URLs:
+   ```twig
+   {# WRONG — will always point to French URL, ignores /en/ prefix #}
+   <a href="/realisation/{{ item.slug }}/">
+
+   {# CORRECT — generates locale-aware URL #}
+   <a href="{{ 'realisation'|page({slug: item.slug}) }}">
+   ```
+
+7. **Translate titles in the layout** using `|trans`:
+   ```twig
+   <title>{{ this.page.meta_title ? this.page.meta_title|trans : this.page.title|trans }} - Site Name</title>
+   ```
+   And add translations to `themes/<name>/lang/en.json`:
+   ```json
+   {
+       "À propos": "About us",
+       "À propos - My Company": "About us - My Company"
+   }
+   ```
+
+8. **Component slug lookup must search both base column and translations table.**
+   The Translatable trait stores primary language values in the model's `slug` column and other languages in `system_translate_attributes`. A simple `where('slug', ...)` won't find translated slugs:
+   ```php
+   public function post()
+   {
+       $slug = $this->property('slug');
+       return Post::where('slug', $slug)->published()->first()
+           ?: Post::whereTranslation('slug', 'en', $slug)->published()->first();
+   }
+   ```
+   Note: `whereTranslation` signature is `($attribute, $locale, $value)`.
+
+9. **Seed translations** using scraped content from the non-default language pages:
+   ```php
+   $model->setTranslation('title', 'en', 'English Title');
+   $model->setTranslation('slug', 'en', 'english-slug');
+   $model->setTranslation('content', 'en', '<p>English content</p>');
+   // IMPORTANT: strip HTML from plain-text fields
+   $model->setTranslation('excerpt', 'en', strip_tags($englishExcerpt));
+   $model->save();
+   ```
+
+10. **Theme pages** work automatically — the Translatable trait returns the right language based on the active site.
+
+**For MultisiteGroup + Translatable (country subsites with languages):**
+
+1. **Create site groups** at Settings → Manage Sites → Manage Site Groups:
+   - One group per country/subsite (e.g., "Singapore", "Hong Kong", "Korea")
+
+2. **Create sites** within each group:
+   - Each language per country gets its own site definition
+   - Set route prefix (e.g., `/hk` for Chinese, `/hk/en` for English)
+   - Set locale per site
+   - Assign each site to its country group
+
+3. **Add both traits** to models:
+   ```php
+   use \October\Rain\Database\Traits\MultisiteGroup;
+   use \October\Rain\Database\Traits\Translatable;
+
+   public $translatable = ['title', 'slug', 'excerpt', 'content', 'description'];
+   ```
+   MultisiteGroup scopes records per country. Translatable handles language variants within each country.
+
+4. **Seed content per site group** — each country's content is independent:
+   ```php
+   // Create record in context of a specific site
+   Site::withContext($siteId, function() {
+       $model = MyModel::create([...]);
+       // Add translations for other languages in the same group
+       $model->setTranslation('title', 'en', 'English Title');
+       $model->save();
+   });
+   ```
+
+5. **Theme** may need separate page files per group if layouts differ significantly between countries, or use conditional logic based on `this.site.group`.
 
 ## Phase 6: Finalization
 

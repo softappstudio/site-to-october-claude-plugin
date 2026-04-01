@@ -29,18 +29,26 @@ When converting a website's outer HTML shell into a layout:
 
 ```
 description = "Default Layout"
+
+[sitePicker]
+[localePicker]
 ==
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ this.site.locale }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ this.page.meta_title ?: this.page.title }}</title>
+    <title>{{ this.page.meta_title ? this.page.meta_title|trans : this.page.title|trans }} - Site Name</title>
     <meta name="description" content="{{ this.page.meta_description }}">
+    <meta property="og:title" content="{{ this.page.meta_title ? this.page.meta_title|trans : this.page.title|trans }} - Site Name">
+    <meta property="og:description" content="{{ this.page.meta_description }}">
+    {% for site in sitePicker.sites %}
+        <link rel="alternate" hreflang="{{ site.locale }}" href="{{ site.url }}" />
+    {% endfor %}
     {% styles %}
     <link rel="stylesheet" href="{{ 'assets/css/style.css'|theme }}">
 </head>
-<body class="{{ this.page.id }}">
+<body class="{{ this.page.cssClass }}">
     {% partial 'header' %}
 
     {% page %}
@@ -58,7 +66,11 @@ description = "Default Layout"
 - `{% scripts %}` goes before `</body>` BEFORE custom scripts
 - `{% page %}` marks where page content renders — exactly ONE per layout
 - `{% partial 'name' %}` for each reusable block
-- Use `{{ this.page.title }}` and `{{ this.page.meta_description }}` for SEO tags
+- Use `{{ this.site.locale }}` for the `<html lang>` attribute — NOT a hardcoded language
+- **Title translation:** Use `{{ this.page.meta_title ? this.page.meta_title|trans : this.page.title|trans }}` — NOT `{{ this.page.meta_title ?: this.page.title }}`. The `|trans` filter is essential for multilingual sites so titles are translated in the layout.
+- Apply `|trans` to og:title as well
+- Add `[sitePicker]` and `[localePicker]` components for multilingual sites
+- Add `<link rel="alternate" hreflang>` tags for SEO
 - Keep external CDN links (Google Fonts, Font Awesome, jQuery CDN) as-is
 - Convert local asset paths to `{{ 'assets/path/file.ext'|theme }}`
 
@@ -104,16 +116,18 @@ When converting unique page content:
 **File:** `themes/<name>/pages/<name>.htm`
 
 ```
-url = "/about"
+url = "/a-propos/"
 layout = "default"
-title = "About Us"
+title = "À propos"
 
 [viewBag]
-meta_title = "About Us - Site Name"
-meta_description = "Learn more about our company"
+localeUrl[en] = "/about-us/"
+localeUrl[fr] = "/a-propos/"
+meta_title = "À propos - Site Name"
+meta_description = "En savoir plus sur notre entreprise"
 ==
 <section class="page-about">
-    <h1>About Us</h1>
+    <h1>{{ 'À propos'|trans }}</h1>
     <div class="content">
         <p>Page content here...</p>
     </div>
@@ -126,12 +140,23 @@ meta_description = "Learn more about our company"
 - Optional parameter: `url = "/blog/:slug?"`
 - Wildcard: `url = "/blog/:category*/:slug"`
 
+**Multilingual URL translation with `localeUrl` (requires `rainlab/translate-plugin`):**
+```
+[viewBag]
+localeUrl[en] = "/project/:slug"
+localeUrl[fr] = "/realisation/:slug"
+```
+The `localeUrl` in viewBag tells RainLab.Translate what the URL should be for each locale. The base `url` stays in the primary language. The route prefix (e.g., `/en`) is added automatically by OctoberCMS multisite — do NOT include it in `localeUrl`.
+
 **Rules:**
 - Every page MUST have `url` and `layout`
 - `title` is used as fallback for `<title>` tag
 - Only include the content area — NOT the layout/header/footer
 - For listing pages, wrap content in loop structures (to be wired to components later)
 - For detail pages, use Twig variables (to be populated by components later)
+- **For multilingual sites:** add `localeUrl[xx]` entries in `[viewBag]` for EVERY page — including static pages and dynamic `:slug` pages
+- **Use `|trans` filter** on user-visible text in templates (headings, button labels, etc.)
+- **Add title translations** to `lang/en.json` (or other locale files) including `meta_title` values like `"À propos - My Company": "About us - My Company"`
 
 ## Asset Path Conversion
 
@@ -279,6 +304,87 @@ fields:
         label: Instagram URL
         type: text
 ```
+
+## Multilingual Sites — Critical Rules
+
+When the site has multiple languages, these rules are essential. Failure to follow them causes broken URLs, empty detail pages, and untranslated titles.
+
+### 1. Install RainLab.Translate
+
+```bash
+composer require rainlab/translate-plugin
+php artisan october:migrate
+```
+
+This plugin provides `localeUrl` viewBag support and the `localePicker` component. Without it, URL translation does not work.
+
+### 2. Layout Must Include Both Components
+
+```
+[sitePicker]
+[localePicker]
+```
+
+`sitePicker` provides `sitePicker.sites` for language switcher links and hreflang tags. `localePicker` enables the `localeUrl` routing.
+
+### 3. Never Hardcode Internal Links
+
+**Wrong:**
+```twig
+<a href="/realisation/{{ realisation.slug }}/">{{ realisation.title }}</a>
+```
+
+**Correct:**
+```twig
+<a href="{{ 'realisation'|page({slug: realisation.slug}) }}">{{ realisation.title }}</a>
+```
+
+The `|page` filter generates locale-aware URLs that respect `localeUrl`. Hardcoded links will always point to the primary language URL and ignore the `/en/` prefix.
+
+### 4. Component Slug Lookup Must Handle Translations
+
+OctoberCMS Translatable trait stores primary language values in the model's base column and translations in a separate table (`system_translate_attributes`). A simple `where('slug', $slug)` will NOT find translated slugs.
+
+Components must search both:
+
+```php
+public function realisation()
+{
+    $slug = $this->property('slug');
+
+    // Primary language slug is in the base column; translated slugs are in the translations table
+    return Realisation::where('slug', $slug)->published()->first()
+        ?: Realisation::whereTranslation('slug', 'en', $slug)->published()->first();
+}
+```
+
+The `whereTranslation` signature is: `whereTranslation($attribute, $locale, $value)`.
+
+### 5. Seeding Translated Content — Strip HTML from Plain Text Fields
+
+When seeding English translations for plain-text fields (like `excerpt`), strip HTML tags:
+
+```php
+$model->setTranslation('excerpt', 'en', strip_tags($englishExcerpt));
+$model->save();
+```
+
+WYSIWYG fields (`content`) can keep HTML. But plain text fields (`excerpt`, `title`, `slug`) must NOT contain HTML tags — they will render as raw markup in the backend and frontend.
+
+### 6. Theme Language Files
+
+Create `themes/<name>/lang/en.json` with translations for ALL user-visible strings:
+
+```json
+{
+    "À propos": "About us",
+    "Réalisations": "Projects",
+    "À propos - My Company": "About us - My Company",
+    "Contactez-nous": "Contact us"
+}
+```
+
+This file uses the primary language string as the key and the translation as the value. The `|trans` Twig filter looks up these keys.
 
 ## Wiring Components to Pages
 
